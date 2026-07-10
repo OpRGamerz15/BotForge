@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Vynix Projects — Minecraft Modpacks & Shaders by Axolium. Home of Axolotl PVP+ and VynixShader.">
+  <title>Vynix Projects — Premium Minecraft Projects</title>
+  <style>
+    /* Premium Purple Crystal Theme Variables */
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #111118;
+      --bg-tertiary: #16161f;
+      --bg-card: rgba(22, 22, 35, 0.6);
+      --bg-glass: rgba(255, 255, 255, 0.03);
+      --accent-primary: #7c3aed;
+      --accent-secondary: #a78bfa;
+      --accent-glow: rgba(124, 58, 237, 0.4);
+      --accent-cyan: #06b6d4;
+      --accent-pink: #ec4899;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-sky: #0ea5e9;
+      --accent-orange: #f97316;
+      --gradient-purple: linear-gradient(135deg, #7c3aed, #a78bfa);
+      --gradient-cyan: linear-gradient(135deg, #06b6d4, #22d3ee);
+      --gradient-btn: linear-gradient(135deg, #7c3aed, #6d28d9);
+      --text-primary: #f1f1f6;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --border-color: rgba(255, 255, 255, 0.06);
+      --border-glow: rgba(124, 58, 237, 0.3);
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-full: 9999px;
+      --transition-fast: 0.15s ease;
+      --transition-base: 0.3s ease;
+      --header-height: 70px;
+      --container-max: 1280px;
+    }
+
+    /* Core Styles */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; font-size: 16px; }
+    body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.6; min-height: 100vh; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent-secondary); text-decoration: none; transition: color var(--transition-fast); }
+    ul { list-style: none; }
+    button { cursor: pointer; font-family: inherit; }
+
+    /* Fixed Background Image using base64 or local image */
+    .animated-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -2;
+      background: url('data:image/png;base64,/* BASE64_IMAGE_STRING_HERE */') no-repeat center center;
+      background-size: cover;
+    }
+    .grid-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      pointer-events: none;
+      background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    /* Layout & Navigation */
+    .container { width: 100%; max-width: var(--container-max); margin: 0 auto; padding: 0 24px; }
+    .header { position: fixed; top: 0; left: 0; width: 100%; height: var(--header-height); z-index: 100; background: rgba(10, 10, 15, 0.8); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border-color); }
+    .header .container { display: flex; align-items: center; justify-content: space-between; height: 100%; }
+    .logo { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 1.3rem; }
+    .logo span { background: var(--gradient-purple); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .nav-links { display: flex; align-items: center; gap: 32px; }
+    .nav-links a { color: var(--text-secondary); font-size: 0.9rem; font-weight: 500; position: relative; padding: 8px 0; }
+    .nav-links a.active, .nav-links a:hover { color: var(--text-primary); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border-radius: var(--radius-md); font-size: 0.9rem; font-weight: 600; border: none; }
+    .btn-primary { background: var(--gradient-btn); color: #fff; box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3); }
+    .btn-outline { background: transparent; border: 1px solid var(--accent-primary); color: var(--accent-secondary); }
+    .btn-sm { padding: 6px 14px; font-size: 0.8rem; }
+
+    /* Cards */
+    .card { background: var(--bg-card); backdrop-filter: blur(12px); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; transition: all var(--transition-base); }
+    .card:hover { transform: translateY(-4px); border-color: var(--border-glow); box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+
+    /* Single-page Section Router (No Javascript dependency for showing/hiding blocks) */
+    [id^="section-"] { display: none; }
+    #section-home { display: block; }
+  </style>
+</head>
+<body>
+
+  <!-- Static Background Graphic -->
+  <div class="animated-bg"></div>
+  <div class="grid-overlay"></div>
+
+  <!-- Global Navigation Header -->
+  <header class="header">
+    <div class="container">
+      <a href="#home" class="logo">
+        <div class="logo-text"><span>Vynix</span> Projects</div>
+      </a>
+      <nav class="nav-links">
+        <a href="#home" class="active" data-section="home">Home</a>
+        <a href="#projects" data-section="projects">Projects</a>
+        <a href="#categories" data-section="categories">Categories</a>
+        <a href="#login" class="btn btn-outline btn-sm">Login</a>
+        <a href="#register" class="btn btn-primary btn-sm">Register</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- SECTION: HOME -->
+  <div id="section-home">
+    <section class="container" style="padding-top: 140px; text-align: center;">
+      <h1 style="font-size: 3.5rem; font-weight: 800;">Minecraft Projects Crafted with <span style="background: var(--gradient-purple); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Passion</span></h1>
+      <p style="color: var(--text-secondary); margin: 20px auto; max-width: 600px;">100% real Minecraft modpacks and shader packs developed by Axolium in Dhaka, Bangladesh.</p>
+      <div style="margin-top: 30px;">
+        <a href="#projects" class="btn btn-primary">Browse Projects</a>
+        <a href="#categories" class="btn btn-outline" style="margin-left: 10px;">View Categories</a>
+      </div>
+    </section>
+  </div>
+
+  <!-- SECTION: PROJECTS -->
+  <div id="section-projects">
+    <section class="container" style="padding-top: 140px;">
+      <h2 style="font-size: 2.2rem; margin-bottom: 30px;">My Published <span style="color: var(--accent-secondary)">Projects</span></h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
+        
+        <!-- Axolotl PVP+ -->
+        <article class="card" style="padding: 24px;">
+          <h3>🔥 Axolotl PVP+</h3>
+          <p style="color: var(--text-secondary); margin: 12px 0;">Lightweight, high-FPS competitive PvP modpack with 55 Fabric mods.</p>
+          <div style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 16px;">📥 2,068 Downloads | 📦 Fabric 1.21.5</div>
+          <a href="https://modrinth.com/modpack/axolotl-pvp+" target="_blank" class="btn btn-primary btn-sm">Download on Modrinth</a>
+        </article>
+
+        <!-- VynixShader -->
+        <article class="card" style="padding: 24px;">
+          <h3>☀️ VynixShader</h3>
+          <p style="color: var(--text-secondary); margin: 12px 0;">Performance-focused lightweight shader featuring realistic lighting and shadows.</p>
+          <div style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 16px;">📥 35 Downloads | Iris / OptiFine</div>
+          <a href="https://modrinth.com/shader/vynixshader" target="_blank" class="btn btn-primary btn-sm">Download on Modrinth</a>
+        </article>
+
+      </div>
+    </section>
+  </div>
+
+  <!-- SECTION: CATEGORIES -->
+  <div id="section-categories">
+    <section class="container" style="padding-top: 140px;">
+      <h2 style="font-size: 2.2rem; margin-bottom: 30px;">Browse <span style="color: var(--accent-secondary)">Categories</span></h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+        <a href="#modpacks" class="card" style="padding: 30px; text-align: center;">
+          <div style="font-size: 2.5rem; margin-bottom: 10px;">🔥</div>
+          <h4>Modpacks</h4>
+          <span style="color: var(--text-muted); font-size: 0.85rem;">1 Active Project</span>
+        </a>
+        <a href="#shader-packs" class="card" style="padding: 30px; text-align: center;">
+          <div style="font-size: 2.5rem; margin-bottom: 10px;">☀️</div>
+          <h4>Shader Packs</h4>
+          <span style="color: var(--text-muted); font-size: 0.85rem;">1 Active Project</span>
+        </a>
+      </div>
+    </section>
+  </div>
+
+  <!-- SECTION: MODPACK DETAILS -->
+  <div id="section-modpacks">
+    <section class="container" style="padding-top: 140px;">
+      <a href="#categories" style="color: var(--accent-secondary); font-size: 0.9rem;">← Back to Categories</a>
+      <h2 style="font-size: 2.5rem; margin: 15px 0 10px;">🔥 Modpacks</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 30px;">Massive collections optimized for seamless gameplay and competitive matches.</p>
+      <article class="card" style="padding: 30px; max-width: 800px;">
+        <h3>Axolotl PVP+</h3>
+        <p style="color: var(--text-secondary); margin: 12px 0;">Enjoy smooth combat mechanics, customized configurations, and zero performance bloat.</p>
+        <div style="font-weight: 600; margin-bottom: 20px;">Downloads: 2,068 | Mod Engine: Fabric</div>
+        <a href="https://modrinth.com/modpack/axolotl-pvp+" target="_blank" class="btn btn-primary">Download on Modrinth</a>
+      </article>
+    </section>
+  </div>
+
+  <!-- SECTION: SHADER DETAILS -->
+  <div id="section-shader-packs">
+    <section class="container" style="padding-top: 140px;">
+      <a href="#categories" style="color: var(--accent-secondary); font-size: 0.9rem;">← Back to Categories</a>
+      <h2 style="font-size: 2.5rem; margin: 15px 0 10px;">☀️ Shader Packs</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 30px;">Aesthetically refined visual enhancements prioritizing fast framerates.</p>
+      <article class="card" style="padding: 30px; max-width: 800px;">
+        <h3>VynixShader</h3>
+        <p style="color: var(--text-secondary); margin: 12px 0;">Clean specular water reflections, vibrant ambient atmosphere, and soft volumetric lighting.</p>
+        <div style="font-weight: 600; margin-bottom: 20px;">Downloads: 35 | Compatible: Iris & OptiFine</div>
+        <a href="https://modrinth.com/shader/vynixshader" target="_blank" class="btn btn-primary">Download on Modrinth</a>
+      </article>
+    </section>
+  </div>
+
+  <!-- SECTION: USER REGISTER -->
+  <div id="section-register">
+    <section class="container" style="padding-top: 140px; display: flex; justify-content: center;">
+      <div class="card" style="width: 100%; max-width: 450px; padding: 40px;">
+        <h2 style="text-align: center; margin-bottom: 24px;">Create Account</h2>
+        <form onsubmit="event.preventDefault(); alert('Registration simulation active.');">
+          <label style="display:block; margin-bottom: 8px;">Username</label>
+          <input type="text" placeholder="OpRGamerz15" style="width: 100%; padding: 12px; margin-bottom: 20px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color:#fff; border-radius: var(--radius-sm);">
+          
+          <button type="submit" class="btn btn-primary" style="width: 100%;">Sign Up</button>
+        </form>
+        <p style="margin-top: 20px; text-align: center; font-size: 0.85rem;"><a href="#login">Already have an account? Login</a></p>
+      </div>
+    </section>
+  </div>
+
+  <!-- SECTION: USER LOGIN -->
+  <div id="section-login">
+    <section class="container" style="padding-top: 140px; display: flex; justify-content: center;">
+      <div class="card" style="width: 100%; max-width: 450px; padding: 40px;">
+        <h2 style="text-align: center; margin-bottom: 24px;">Welcome Back</h2>
+        <form onsubmit="event.preventDefault(); window.location.hash = '#profile';">
+          <label style="display:block; margin-bottom: 8px;">Username or Email</label>
+          <input type="text" placeholder="oprgamerz15yt@gmail.com" required style="width: 100%; padding: 12px; margin-bottom: 20px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color:#fff; border-radius: var(--radius-sm);">
+          
+          <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
+        </form>
+        <p style="margin-top: 20px; text-align: center; font-size: 0.85rem;"><a href="#register">New developer? Create an account</a></p>
+      </div>
+    </section>
+  </div>
+
+  <!-- SECTION: USER PROFILE -->
+  <div id="section-profile">
+    <section class="container" style="padding-top: 140px;">
+      <div class="card" style="padding: 40px; display: flex; gap: 30px; align-items: center; flex-wrap: wrap;">
+        <div style="width: 100px; height: 100px; border-radius: 50%; background: var(--gradient-purple); display:flex; align-items:center; justify-content:center; font-size: 3rem; font-weight:800;">V</div>
+        <div>
+          <h2>OpRGamerz15</h2>
+          <p style="color: var(--accent-secondary); font-weight:600;">👑 Owner & Developer</p>
+          <p style="color: var(--text-secondary); margin-top: 10px;">Minecraft modpack & shader creator. Based in Dhaka, Bangladesh. | 📧 oprgamerz15yt@gmail.com</p>
+          <div style="display: flex; gap: 30px; margin-top: 20px;">
+            <div><div style="font-size: 1.5rem; font-weight:800;">2</div><div style="color: var(--text-muted); font-size:0.8rem;">Projects</div></div>
+            <div><div style="font-size: 1.5rem; font-weight:800;">2,103</div><div style="color: var(--text-muted); font-size:0.8rem;">Downloads</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- SPA Router Script -->
+  <script>
+    (function() {
+      var sections = {};
+      var navLinks = document.querySelectorAll('.nav-links a');
+
+      // Index section elements
+      document.querySelectorAll('[id^="section-"]').forEach(function(el) {
+        sections[el.id.replace('section-', '')] = el;
+      });
+
+      // Show/hide logic
+      function router(id) {
+        if (!sections[id]) id = 'home';
+        
+        Object.keys(sections).forEach(function(key) {
+          sections[key].style.display = 'none';
+        });
+        sections[id].style.display = 'block';
+
+        navLinks.forEach(function(link) {
+          link.classList.remove('active');
+          if (link.getAttribute('href') === '#' + id || link.getAttribute('data-section') === id) {
+            link.classList.add('active');
+          }
+        });
+        window.scrollTo(0, 0);
+      }
+
+      // Hash handler
+      function handleRoute() {
+        var hash = window.location.hash.replace('#', '');
+        router(hash || 'home');
+      }
+
+      window.addEventListener('hashchange', handleRoute);
+      handleRoute();
+    })();
+  </script>
+</body>
+</html>
