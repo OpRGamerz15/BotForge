@@ -137,12 +137,26 @@ textarea.input{resize:none;}
 /* ============ DATA LAYER (localStorage) ============ */
 const STORE_KEY = 'vynix_forge_data_v1';
 
+const DEFAULT_SETTINGS = {
+  accentColor: '#c4632e',       // dashboard chrome accent (not a project's own branding)
+  defaultLoader: 'vanilla',     // applied to newly created projects
+  defaultRamMin: 2048,
+  defaultRamMax: 4096,
+  buildTimeoutSec: 60,
+  autoDownload: true            // auto-trigger download when a build completes
+};
+
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORE_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      // Backward-compatible: older saved data won't have a settings key yet.
+      parsed.settings = {...DEFAULT_SETTINGS, ...(parsed.settings||{})};
+      return parsed;
+    }
   }catch(e){}
-  return { projects:[], servers:[], files:[], builds:[], releases:[] };
+  return { projects:[], servers:[], files:[], builds:[], releases:[], settings:{...DEFAULT_SETTINGS} };
 }
 function saveDB(){
   try{
@@ -184,17 +198,38 @@ function sweepInterruptedBuilds(){
 }
 sweepInterruptedBuilds();
 
+// ===== Theme (Appearance setting) =====
+// Recomputes the dashboard's --ember/--ember-bright/--ember-dim CSS variables
+// from the user's chosen accent color, so changing it in Settings visibly
+// re-themes the whole app immediately -- not just a label that does nothing.
+function shadeHex(hex, percent){
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.max(0, (n>>16) + Math.round(255*percent)));
+  const g = Math.min(255, Math.max(0, ((n>>8)&0xff) + Math.round(255*percent)));
+  const b = Math.min(255, Math.max(0, (n&0xff) + Math.round(255*percent)));
+  return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+function applyTheme(){
+  const accent = (DB.settings && DB.settings.accentColor) || DEFAULT_SETTINGS.accentColor;
+  const root = document.documentElement.style;
+  root.setProperty('--ember', accent);
+  root.setProperty('--ember-bright', shadeHex(accent, 0.16));
+  root.setProperty('--ember-dim', shadeHex(accent, -0.35));
+}
+applyTheme();
+
 function newId(prefix){ return prefix+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 
 function defaultProject(id,name,template){
   const now = Date.now();
+  const s = DB.settings || DEFAULT_SETTINGS;
   return {
     id, name, template: template||'custom', createdAt: now, updatedAt: now, archived:false,
     identity:{ launcherName:name, version:'0.1.0', publisher:'', description:'', website:'', discord:'' },
     branding:{ primaryColor:'#c4632e', accentColor:'#5b7065', textColor:'#ede8e1', icon:null, logo:null, background:null, splash:null },
     layout:{ sidebar:true, home:true, news:true, serverSelector:true, profile:true, settings:true, footer:true },
     features:{ news:true, serverStatus:true, discord:false, modManager:true, settings:true, updates:true, accountManagement:true },
-    minecraft:{ version:'', loader:'vanilla', javaRequirement:'', ram:{min:2048,max:4096} }
+    minecraft:{ version:'', loader:s.defaultLoader, javaRequirement:'', ram:{min:s.defaultRamMin, max:s.defaultRamMax} }
   };
 }
 
@@ -633,10 +668,41 @@ function publishRelease(){
 }
 
 /* ============ RENDER: SETTINGS ============ */
+function updateSettings(patchFn){
+  DB.settings = DB.settings || {...DEFAULT_SETTINGS};
+  patchFn(DB.settings);
+  saveDB(); applyTheme(); render();
+}
+function exportAllData(){
+  const blob = new Blob([JSON.stringify(DB,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='vynix-forge-backup-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+function importAllData(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const parsed = JSON.parse(reader.result);
+      if(!parsed || !Array.isArray(parsed.projects)) throw new Error("This file doesn't look like a Vynix Forge backup.");
+      parsed.projects = parsed.projects||[]; parsed.servers = parsed.servers||[]; parsed.files = parsed.files||[];
+      parsed.builds = parsed.builds||[]; parsed.releases = parsed.releases||[];
+      parsed.settings = {...DEFAULT_SETTINGS, ...(parsed.settings||{})};
+      DB = parsed;
+      sweepInterruptedBuilds(); // in case the backup itself had unfinished builds
+      saveDB(); applyTheme(); render();
+      alert('Import complete: '+DB.projects.length+' project(s) restored.');
+    }catch(e){
+      alert('Import failed: '+e.message);
+    }
+  };
+  reader.readAsText(file);
+}
 function renderSettingsPage(){
   const header = '<div class="page-header"><div><h1 class="page-title">Settings</h1><p class="page-desc">Account, appearance, and integration preferences.</p></div></div>';
   const sections = ['Account','Appearance','Security','Integrations','Build configuration'];
   const nav = sections.map(s=>'<button class="studio-nav-item '+(state.settingsSection===s?'active':'')+'" onclick="setState({settingsSection:\''+s+'\'})">'+s+'</button>').join('');
+  const s = DB.settings || DEFAULT_SETTINGS;
   let content = '';
   if(state.settingsSection==='Integrations'){
     content = '<div class="panel" style="padding:16px;margin-bottom:16px;"><h3 class="panel-title" style="margin-bottom:8px;">GitHub</h3>'+
@@ -646,24 +712,47 @@ function renderSettingsPage(){
       '<p style="font-size:12.5px;color:var(--dim);">Search and import happen directly against Modrinth\'s public API \u2014 no account connection needed.</p></div>';
   }else if(state.settingsSection==='Account'){
     content = '<p style="font-size:13px;color:var(--dim);margin-bottom:16px;">Vynix Forge doesn\'t require an account \u2014 all project data lives in this browser (localStorage).</p>'+
+      '<div class="panel" style="padding:16px;margin-bottom:16px;"><h3 class="panel-title" style="margin-bottom:8px;">Backup</h3>'+
+      '<p style="font-size:12.5px;color:var(--dim);margin-bottom:10px;">Export every project, server, file record, build, release, and setting as one JSON file \u2014 or restore from a previous export.</p>'+
+      '<div style="display:flex;gap:8px;">'+
+        '<button class="btn-secondary" onclick="exportAllData()">Export all data</button>'+
+        '<label class="btn-secondary" style="cursor:pointer;">Import data<input type="file" accept="application/json" style="display:none;" onchange="if(this.files[0]) importAllData(this.files[0])"/></label>'+
+      '</div></div>'+
       '<div class="panel" style="padding:16px;"><h3 class="panel-title" style="margin-bottom:8px;">Local data</h3>'+
-      '<p style="font-size:12.5px;color:var(--dim);margin-bottom:10px;">Clear every project, server, file record, build, and release. This can\'t be undone.</p>'+
+      '<p style="font-size:12.5px;color:var(--dim);margin-bottom:10px;">Clear every project, server, file record, build, and release. This can\'t be undone \u2014 export a backup first if you want to keep a copy.</p>'+
       (state.confirmingClear ?
         '<button class="link-btn" style="color:var(--danger);margin-right:12px;" onclick="clearAllData()">Confirm \u2014 delete everything</button><button class="link-btn" onclick="setState({confirmingClear:false})">Cancel</button>' :
         '<button class="link-btn" style="color:var(--danger);" onclick="setState({confirmingClear:true})">Clear all local data</button>')+
       '</div>';
   }else if(state.settingsSection==='Appearance'){
-    content = '<p style="font-size:13px;color:var(--dim);">Vynix Forge\'s own dashboard theme is fixed for now. Your generated launcher\'s appearance is configured per-project in the Branding tab.</p>';
+    content = '<div class="panel" style="padding:16px;margin-bottom:16px;">'+
+      '<h3 class="panel-title" style="margin-bottom:10px;">Dashboard accent color</h3>'+
+      '<div class="color-row" style="margin-bottom:10px;">'+
+        '<input type="color" value="'+s.accentColor+'" onchange="updateSettings(x=>x.accentColor=this.value)"/>'+
+        '<input class="input" value="'+esc(s.accentColor)+'" onchange="updateSettings(x=>x.accentColor=this.value)"/>'+
+      '</div>'+
+      '<button class="link-btn" onclick="updateSettings(x=>x.accentColor=DEFAULT_SETTINGS.accentColor)">Reset to default</button>'+
+    '</div>'+
+    '<p style="font-size:12.5px;color:var(--faint);">This only re-themes Vynix Forge\'s own dashboard chrome (buttons, active nav, highlights). Your generated launcher\'s appearance is configured separately, per-project, in that project\'s Branding tab.</p>';
   }else if(state.settingsSection==='Security'){
     content = '<p style="font-size:13px;color:var(--dim);">No account credentials are stored \u2014 Vynix Forge runs entirely client-side.</p>';
   }else{
-    content = '<p style="font-size:13px;color:var(--dim);">Default build behavior is configured per-project from that project\'s Generate & Build tab.</p>';
+    const loaderSelect = '<select class="input" onchange="updateSettings(x=>x.defaultLoader=this.value)">'+LOADERS.map(([v,l])=>'<option value="'+v+'" '+(s.defaultLoader===v?'selected':'')+'>'+l+'</option>').join('')+'</select>';
+    content = field('Default mod loader for new projects', loaderSelect)+
+      '<div class="grid-2">'+
+        field('Default minimum RAM (MB)', '<input class="input" type="number" value="'+s.defaultRamMin+'" onchange="updateSettings(x=>x.defaultRamMin=Number(this.value))"/>')+
+        field('Default maximum RAM (MB)', '<input class="input" type="number" value="'+s.defaultRamMax+'" onchange="updateSettings(x=>x.defaultRamMax=Number(this.value))"/>')+
+      '</div>'+
+      field('Build timeout (seconds)', '<input class="input" type="number" min="5" value="'+s.buildTimeoutSec+'" onchange="updateSettings(x=>x.buildTimeoutSec=Math.max(5,Number(this.value)))"/>', 'A build that hangs past this long is automatically marked Failed instead of staying stuck in Building forever.')+
+      '<button class="toggle" onclick="updateSettings(x=>x.autoDownload=!x.autoDownload)"><span>Auto-download when a build completes</span><span class="toggle-track '+(s.autoDownload?'on':'')+'"><span class="toggle-thumb"></span></span></button>'+
+      '<p style="margin-top:14px;font-size:11.5px;color:var(--faint);">These are defaults applied to newly created projects and new builds \u2014 existing projects and past builds are unaffected.</p>';
   }
   return header + '<div class="page-body" style="display:flex;gap:32px;"><nav style="width:190px;flex-shrink:0;display:flex;flex-direction:column;gap:2px;">'+nav+'</nav><div style="flex:1;max-width:520px;">'+content+'</div></div>';
 }
 function clearAllData(){
-  DB = { projects:[], servers:[], files:[], builds:[], releases:[] };
-  saveDB(); setState({confirmingClear:false});
+  const keepSettings = DB.settings || {...DEFAULT_SETTINGS};
+  DB = { projects:[], servers:[], files:[], builds:[], releases:[], settings: keepSettings };
+  saveDB(); applyTheme(); setState({confirmingClear:false});
 }
 
 /* ============ RENDER: PROJECT STUDIO ============ */
@@ -972,8 +1061,6 @@ function studioBuild(p){
 
 async function dataUrlToBlob(dataUrl){ const res = await fetch(dataUrl); return res.blob(); }
 
-const BUILD_TIMEOUT_MS = 60000; // fixes "no timeout" requirement
-
 async function generateAndDownload(projectId){
   // Prevent duplicate/concurrent processing of the same project's build.
   if(RUNNING_PROJECTS.has(projectId)){
@@ -985,11 +1072,17 @@ async function generateAndDownload(projectId){
   const buildId = requestBuild(projectId);
   render(); // show the new queued build immediately, no refresh needed
 
+  const timeoutMs = Math.max(5, (DB.settings && DB.settings.buildTimeoutSec) || DEFAULT_SETTINGS.buildTimeoutSec) * 1000;
   let timedOut = false;
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
-    failBuild(buildId, 'Build timed out after '+(BUILD_TIMEOUT_MS/1000)+'s.');
-  }, BUILD_TIMEOUT_MS);
+    failBuild(buildId, 'Build timed out after '+(timeoutMs/1000)+'s.');
+    // If the code below is stuck forever on a dead await (a promise that
+    // never settles), its own finally{} block will never run to release
+    // this guard -- release it here instead, or the project could never
+    // start another build again even though the UI correctly shows failed.
+    RUNNING_PROJECTS.delete(projectId);
+  }, timeoutMs);
 
   try{
     const p = projectById(projectId);
@@ -1057,10 +1150,15 @@ async function generateAndDownload(projectId){
     // the browser blocks/fails it, that must never retroactively flip an
     // already-completed build back to failed (the artifact still exists and
     // is downloadable via the "Download Build" button either way).
-    try{
-      downloadBlob(blob, filename);
-    }catch(downloadErr){
-      logBuild(buildId, 'Note: automatic download did not start ('+downloadErr.message+'). Use the "Download Build" button below to get the artifact.');
+    const autoDownload = DB.settings ? DB.settings.autoDownload : DEFAULT_SETTINGS.autoDownload;
+    if(autoDownload){
+      try{
+        downloadBlob(blob, filename);
+      }catch(downloadErr){
+        logBuild(buildId, 'Note: automatic download did not start ('+downloadErr.message+'). Use the "Download Build" button below to get the artifact.');
+      }
+    }else{
+      logBuild(buildId, 'Auto-download is turned off in Settings. Use the "Download Build" button below to get the artifact.');
     }
   }catch(e){
     clearTimeout(timeoutHandle);
