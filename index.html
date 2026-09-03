@@ -144,8 +144,45 @@ function loadDB(){
   }catch(e){}
   return { projects:[], servers:[], files:[], builds:[], releases:[] };
 }
-function saveDB(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+function saveDB(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(DB));
+    PERSIST_OK = true;
+  }catch(e){
+    // Root-cause fix: this used to throw uncaught (e.g. QuotaExceededError from
+    // large base64 branding images bloating the stored JSON), which silently
+    // aborted whatever function called it mid-flight -- including requestBuild(),
+    // which is why builds could get created and then never advance past "queued".
+    // We now degrade to in-memory-only operation instead of crashing the caller.
+    PERSIST_OK = false;
+    console.warn('Vynix Forge: could not persist to localStorage (quota exceeded or blocked). Continuing in-memory only.', e);
+  }
+}
+let PERSIST_OK = true;
 let DB = loadDB();
+
+// FIX: there is no background worker/process in this app -- a "build" only ever
+// advances while the tab that started it is open and running. If a build is
+// left in any non-terminal state (queued/starting/building) when this script
+// loads -- because the previous session hit the saveDB() bug above, crashed,
+// or the tab was closed/reloaded mid-build -- it can never resume on its own.
+// Sweep those into a real terminal state on every load instead of leaving them
+// stuck forever.
+function sweepInterruptedBuilds(){
+  let changed = false;
+  DB.builds.forEach(b=>{
+    if(!['completed','failed'].includes(b.status)){
+      b.status = 'failed';
+      b.completedAt = Date.now();
+      b.error = 'Interrupted: no build worker was running for this build (the tab was closed, reloaded, or an earlier bug left it stuck). This app builds synchronously in your browser tab, so an interrupted build cannot resume -- start a new one.';
+      b.log = b.log || [];
+      b.log.push('Build marked as failed on load: interrupted, no worker resumed it.');
+      changed = true;
+    }
+  });
+  if(changed) saveDB();
+}
+sweepInterruptedBuilds();
 
 function newId(prefix){ return prefix+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 
@@ -258,14 +295,56 @@ function deleteServer(id){ DB.servers = DB.servers.filter(s=>s.id!==id); saveDB(
 function addFile(projectId, file){ DB.files.push({ id:newId('file'), projectId, updatedAt:Date.now(), ...file }); saveDB(); render(); }
 function deleteFile(id){ DB.files = DB.files.filter(f=>f.id!==id); saveDB(); render(); }
 
+// ===== Build lifecycle =====
+// Real states only: queued -> starting -> building -> completed | failed.
+// No status is ever set without a real event causing it (see generateAndDownload).
+const ARTIFACTS = {};      // buildId -> { blob, filename }  (in-memory only; see note below)
+const RUNNING_PROJECTS = new Set(); // projectIds with a build currently in flight -- prevents duplicate/concurrent processing of the same project
+
+function findBuild(id){ return DB.builds.find(b=>b.id===id); }
+
+function setBuildStatus(id, status, progress){
+  const b = findBuild(id); if(!b) return;
+  b.status = status;
+  if(progress != null) b.progress = progress;
+  if(status === 'starting' && !b.startedAt) b.startedAt = Date.now();
+  saveDB(); render();
+}
+function logBuild(id, line){
+  const b = findBuild(id); if(!b) return;
+  b.log.push(line);
+  saveDB(); render();
+}
+function completeBuild(id, artifactName, artifactSize){
+  const b = findBuild(id); if(!b) return;
+  b.status = 'completed';
+  b.progress = 100;
+  b.completedAt = Date.now();
+  b.artifactName = artifactName;
+  b.artifactSize = artifactSize;
+  b.log.push('Build completed. Artifact: '+artifactName+' ('+artifactSize+' bytes).');
+  saveDB(); render();
+}
+function failBuild(id, message){
+  const b = findBuild(id); if(!b) return;
+  b.status = 'failed';
+  b.completedAt = Date.now();
+  b.error = message;
+  b.progress = b.progress || 0;
+  b.log.push('Build failed: '+message);
+  saveDB(); render();
+}
+
 function requestBuild(projectId){
   const id = newId('build');
-  DB.builds.unshift({ id, projectId, createdAt:Date.now(), status:'queued', log:['Build queued.'] });
+  DB.builds.unshift({
+    id, projectId,
+    createdAt: Date.now(), startedAt: null, completedAt: null,
+    status: 'queued', progress: 0,
+    log: ['Build queued.'],
+    error: null, artifactName: null, artifactSize: null
+  });
   saveDB(); return id;
-}
-function appendLog(id, line, status){
-  const b = DB.builds.find(x=>x.id===id); if(!b) return;
-  b.log.push(line); if(status) b.status = status; saveDB(); render();
 }
 
 /* ============ ICONS (tiny inline SVG helper) ============ */
@@ -363,7 +442,7 @@ function renderOverview(){
     emptyState('hammer','No builds yet','Builds appear here once you generate and build a launcher project.') :
     '<ul style="list-style:none;margin:0;padding:0;">'+builds.slice(0,5).map(b=>
       '<li class="list-item"><div style="display:flex;align-items:center;gap:8px;"><span class="dot dot-'+statusDot(b.status)+'"></span><span style="font-size:14px;">'+b.id+'</span></div>'+
-      '<span style="font-size:11.5px;color:var(--faint);text-transform:capitalize;">'+b.status+'</span></li>'
+      '<span style="font-size:11.5px;color:var(--faint);">'+statusLabel(b.status)+'</span></li>'
     ).join('')+'</ul>';
 
   const panels = '<div class="grid-2">'+
@@ -388,16 +467,19 @@ function emptyState(ic,title,desc,action){
   (desc?'<p class="empty-desc">'+desc+'</p>':'')+(action?'<div style="margin-top:14px;">'+action+'</div>':'')+'</div>';
 }
 function statusDot(status){
-  if(status==='succeeded') return 'ok';
+  if(status==='completed') return 'ok';
   if(status==='failed') return 'fail';
-  if(status==='running'||status==='validating') return 'warn';
-  return 'neutral';
+  if(status==='starting'||status==='building') return 'warn';
+  return 'neutral'; // queued
 }
 function statusBadgeClass(status){
-  if(status==='succeeded') return 'badge-ok';
+  if(status==='completed') return 'badge-ok';
   if(status==='failed') return 'badge-fail';
-  if(status==='running'||status==='validating') return 'badge-warn';
-  return 'badge-neutral';
+  if(status==='starting'||status==='building') return 'badge-warn';
+  return 'badge-neutral'; // queued
+}
+function statusLabel(status){
+  return {queued:'Queued', starting:'Starting', building:'Building', completed:'Completed', failed:'Failed'}[status] || status;
 }
 
 /* ============ RENDER: PROJECTS ============ */
@@ -467,12 +549,18 @@ function renderBuildsPage(){
     body = '<div class="panel">'+builds.map(b=>{
       const p = projectById(b.projectId);
       const open = state.expandedBuildId===b.id;
+      const inProgress = b.status==='starting' || b.status==='building';
       return '<div style="border-bottom:1px solid var(--border-soft);">'+
         '<button class="list-item" style="width:100%;cursor:pointer;" onclick="setState({expandedBuildId: state.expandedBuildId===\''+b.id+'\'?null:\''+b.id+'\'})">'+
           '<div><p style="margin:0;font-size:14px;font-weight:500;">'+(p?esc(p.name):'Unknown')+' <span style="color:var(--faint);font-weight:400;">\u00b7 '+b.id+'</span></p>'+
-          '<p style="margin:0;font-size:11.5px;color:var(--faint);">'+new Date(b.createdAt).toLocaleString()+'</p></div>'+
-          '<span class="badge '+statusBadgeClass(b.status)+'">'+b.status+'</span>'+
+          '<p style="margin:0;font-size:11.5px;color:var(--faint);">'+new Date(b.createdAt).toLocaleString()+(inProgress?' \u00b7 '+(b.progress||0)+'%':'')+'</p></div>'+
+          '<span class="badge '+statusBadgeClass(b.status)+'">'+statusLabel(b.status)+'</span>'+
         '</button>'+
+        (b.status==='failed' && b.error ? '<div style="padding:0 16px 10px 16px;"><p style="margin:0;font-size:12px;color:var(--danger);">'+esc(b.error)+'</p></div>' : '')+
+        '<div style="padding:0 16px 12px 16px;display:flex;gap:12px;">'+
+          (b.status==='completed' ? '<button class="link-btn" onclick="event.stopPropagation();redownloadBuild(\''+b.id+'\')">Download Build</button>' : '')+
+          (b.status==='failed' ? '<button class="link-btn" onclick="event.stopPropagation();retryBuild(\''+b.projectId+'\')">Retry build</button>' : '')+
+        '</div>'+
         (open ? '<div style="padding:0 16px 14px 16px;"><div class="log-box">'+b.log.map(l=>'<p>'+esc(l)+'</p>').join('')+'</div></div>' : '')+
       '</div>';
     }).join('')+'</div>';
@@ -823,30 +911,59 @@ function validateProjectFull(p){
 }
 function studioBuild(p){
   const issues = validateProjectFull(p);
-  const canGen = issues.length===0;
   const builds = buildsFor(p.id);
+  const latest = builds[0]; // buildsFor already sorts newest-first
+  const isRunning = RUNNING_PROJECTS.has(p.id);
+
   const validationHtml = issues.length===0 ?
     '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--copper-bright);border:1px solid var(--border-soft);border-radius:8px;padding:10px 14px;">\u2713 Configuration looks valid.</div>' :
     issues.map(i=>'<div style="display:flex;gap:8px;font-size:13px;color:var(--warn);border:1px solid var(--border-soft);border-radius:8px;padding:10px 14px;margin-bottom:6px;">\u26a0 '+esc(i)+'</div>').join('');
 
-  const pipeline = [['Source generated',canGen],['Project validated',canGen],['Build requested',null],['Build running',null],['Build succeeded',null],['Artifact available',null]]
-    .map(([label,ok])=>{
-      const dotClass = ok===null ? 'dot-neutral' : ok ? 'dot-ok' : 'dot-warn';
-      return '<div style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 2px;">'+
-        '<span class="dot '+dotClass+'"></span><span style="'+(ok===null?'color:var(--faint);':'')+'">'+label+'</span>'+
-        (ok===null?'<span style="font-size:10.5px;color:var(--faint);margin-left:auto;">requires GitHub</span>':'')+'</div>';
-    }).join('');
+  // Pipeline reflects the ACTUAL status of the most recent build for this
+  // project, not a hardcoded mockup -- a stage only lights up once that real
+  // build has genuinely reached it.
+  const stages = ['queued','starting','building','completed'];
+  let reachedIndex = -1;
+  if(latest){
+    if(latest.status === 'failed'){
+      // Figure out how far it got before failing, from real recorded data.
+      if(latest.progress >= 20) reachedIndex = 2;      // was building
+      else if(latest.startedAt) reachedIndex = 1;       // was starting
+      else reachedIndex = 0;                            // never left queued
+    } else {
+      reachedIndex = stages.indexOf(latest.status);
+    }
+  }
+  const failedAt = latest && latest.status === 'failed';
+  const pipeline = stages.map((label,i)=>{
+    const reached = i <= reachedIndex;
+    const isCurrent = reached && i===reachedIndex && !failedAt && latest.status!=='completed';
+    const dotClass = !latest ? 'dot-neutral' : reached ? (isCurrent?'dot-warn':'dot-ok') : 'dot-neutral';
+    return '<div style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 2px;">'+
+      '<span class="dot '+dotClass+'"></span><span style="'+(reached?'':'color:var(--faint);')+'text-transform:capitalize;">'+label+'</span>'+
+      (isCurrent && latest.progress!=null ? '<span style="font-size:10.5px;color:var(--faint);margin-left:auto;">'+latest.progress+'%</span>' : '')+
+    '</div>';
+  }).join('') + (failedAt ? '<div style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 2px;"><span class="dot dot-fail"></span><span>Failed</span></div>' : '');
 
   const buildHistory = builds.length===0 ? '<p style="text-align:center;padding:24px;border:1px dashed var(--border-soft);border-radius:8px;color:var(--faint);font-size:13px;">No builds yet.</p>' :
-    '<div class="panel">'+builds.map(b=>'<div style="padding:10px 16px;border-bottom:1px solid var(--border-soft);">'+
-      '<div style="display:flex;justify-content:space-between;"><span style="font-size:13px;">'+b.id+'</span><span class="badge '+statusBadgeClass(b.status)+'">'+b.status+'</span></div>'+
-      '<p style="margin:4px 0 0;font-size:11px;color:var(--faint);">'+esc(b.log[b.log.length-1])+'</p></div>').join('')+'</div>';
+    '<div class="panel">'+builds.map(b=>{
+      const inProgress = b.status==='starting' || b.status==='building';
+      return '<div style="padding:10px 16px;border-bottom:1px solid var(--border-soft);">'+
+        '<div style="display:flex;justify-content:space-between;"><span style="font-size:13px;">'+b.id+'</span><span class="badge '+statusBadgeClass(b.status)+'">'+statusLabel(b.status)+(inProgress&&b.progress!=null?' '+b.progress+'%':'')+'</span></div>'+
+        '<p style="margin:4px 0 0;font-size:11px;color:var(--faint);">'+esc(b.log[b.log.length-1])+'</p>'+
+        (b.status==='failed' && b.error ? '<p style="margin:4px 0 0;font-size:11.5px;color:var(--danger);">'+esc(b.error)+'</p>' : '')+
+        '<div style="display:flex;gap:12px;margin-top:6px;">'+
+          (b.status==='completed' ? '<button class="link-btn" onclick="redownloadBuild(\''+b.id+'\')">Download Build</button>' : '')+
+          (b.status==='failed' ? '<button class="link-btn" onclick="retryBuild(\''+p.id+'\')">Retry build</button>' : '')+
+        '</div>'+
+      '</div>';
+    }).join('')+'</div>';
 
   return studioPageHeader('Generate & build','Turn this configuration into a real project you can compile and distribute.')+
     '<h3 style="font-family:var(--font-display);font-weight:500;font-size:14px;margin:0 0 10px;">Validation</h3>'+validationHtml+
-    '<h3 style="font-family:var(--font-display);font-weight:500;font-size:14px;margin:20px 0 10px;">Pipeline</h3>'+pipeline+
+    '<h3 style="font-family:var(--font-display);font-weight:500;font-size:14px;margin:20px 0 10px;">Pipeline'+(latest?' (latest build)':'')+'</h3>'+pipeline+
     '<p style="margin:10px 0 20px;font-size:11.5px;color:var(--faint);">Vynix Forge generates real source and configuration in your browser for free. Compiling that source into a signed, installable app for Windows, Linux, or macOS needs an actual build machine \u2014 GitHub Actions can run that step once connected.</p>'+
-    '<button class="btn-primary" style="width:auto;margin-bottom:24px;" onclick="generateAndDownload(\''+p.id+'\')">\u2b07 Generate & download source project</button>'+
+    '<button class="btn-primary" style="width:auto;margin-bottom:24px;'+(isRunning?'opacity:.6;':'')+'" '+(isRunning?'disabled':'')+' onclick="generateAndDownload(\''+p.id+'\')">'+(isRunning?'Building\u2026':'\u2b07 Generate & download source project')+'</button>'+
     '<div class="panel" style="padding:16px;margin-bottom:24px;"><h3 class="panel-title" style="margin-bottom:8px;">Connect GitHub for real builds</h3>'+
     '<p style="font-size:12.5px;color:var(--dim);margin-bottom:10px;">Not connected. Pointing this project at a repository lets you push generated source and run GitHub Actions to produce real installers.</p>'+
     '<button class="btn-secondary" disabled style="opacity:.5;cursor:not-allowed;" title="Not wired up in this static build.">Connect repository</button></div>'+
@@ -855,43 +972,126 @@ function studioBuild(p){
 
 async function dataUrlToBlob(dataUrl){ const res = await fetch(dataUrl); return res.blob(); }
 
+const BUILD_TIMEOUT_MS = 60000; // fixes "no timeout" requirement
+
 async function generateAndDownload(projectId){
-  const p = projectById(projectId);
-  const issues = validateProjectFull(p);
-  const buildId = requestBuild(projectId);
-  appendLog(buildId, 'Validating project configuration\u2026', 'validating');
-  if(issues.length){
-    appendLog(buildId, 'Validation failed: '+issues.join(' '), 'failed');
-    render();
+  // Prevent duplicate/concurrent processing of the same project's build.
+  if(RUNNING_PROJECTS.has(projectId)){
+    alert('A build is already running for this project. Wait for it to finish before starting another.');
     return;
   }
-  appendLog(buildId, 'Project validated.');
-  appendLog(buildId, 'Assembling project source\u2026', 'running');
+  RUNNING_PROJECTS.add(projectId);
+
+  const buildId = requestBuild(projectId);
+  render(); // show the new queued build immediately, no refresh needed
+
+  let timedOut = false;
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
+    failBuild(buildId, 'Build timed out after '+(BUILD_TIMEOUT_MS/1000)+'s.');
+  }, BUILD_TIMEOUT_MS);
+
   try{
+    const p = projectById(projectId);
+    if(!p) throw new Error('Project no longer exists (it may have been deleted while this build was queued).');
+
+    setBuildStatus(buildId, 'starting', 5);
+    logBuild(buildId, 'Validating project configuration\u2026');
+
+    const issues = validateProjectFull(p);
+    if(issues.length) throw new Error(issues.join(' '));
+    logBuild(buildId, 'Project validated.');
+
+    setBuildStatus(buildId, 'building', 20);
+    logBuild(buildId, 'Assembling project source\u2026');
+
+    if(typeof JSZip === 'undefined'){
+      throw new Error('JSZip failed to load (check your network connection or ad-blocker for cdnjs.cloudflare.com) -- cannot package the build.');
+    }
+
     const zip = new JSZip();
     const servers = serversFor(projectId);
     const manifest = {
       schema:'vynix-forge/launcher-project@1', generatedAt:new Date().toISOString(),
-      identity:p.identity, branding:{...p.branding, icon:p.branding.icon?'(embedded)':null, logo:p.branding.logo?'(embedded)':null, background:p.branding.background?'(embedded)':null, splash:p.branding.splash?'(embedded)':null},
+      identity:p.identity,
+      branding:{...p.branding, icon:p.branding.icon?'(embedded)':null, logo:p.branding.logo?'(embedded)':null, background:p.branding.background?'(embedded)':null, splash:p.branding.splash?'(embedded)':null},
       layout:p.layout, features:p.features, minecraft:p.minecraft,
       servers: servers.map(s=>({name:s.name,address:s.address,port:s.port,loader:s.loader,autoConnect:s.autoConnect,isDefault:s.isDefault}))
     };
     zip.file('launcher.config.json', JSON.stringify(manifest,null,2));
     zip.file('README.md', '# '+(p.identity.launcherName||p.name)+'\n\nGenerated by Vynix Forge on '+new Date().toISOString()+'.\n\nThis is a source project, not a compiled application. To produce installable builds (.exe / .AppImage / .dmg), wire this project into a build pipeline such as GitHub Actions with electron-builder, or build it locally.\n');
+
+    setBuildStatus(buildId, 'building', 45);
     const assets = zip.folder('assets');
+    let assetCount = 0;
     for(const [key,filename] of Object.entries({icon:'icon',logo:'logo',background:'background',splash:'splash'})){
       const dataUrl = p.branding[key];
-      if(dataUrl){ const blob = await dataUrlToBlob(dataUrl); const ext = (blob.type.split('/')[1])||'png'; assets.file(filename+'.'+ext, blob); }
+      if(dataUrl){
+        const blob = await dataUrlToBlob(dataUrl);
+        const ext = (blob.type.split('/')[1])||'png';
+        assets.file(filename+'.'+ext, blob);
+        assetCount++;
+      }
+      if(timedOut) return;
     }
-    appendLog(buildId, 'Source generated.');
+    logBuild(buildId, 'Packaged '+assetCount+' branding asset(s).');
+
+    setBuildStatus(buildId, 'building', 75);
+    logBuild(buildId, 'Generating archive\u2026');
     const blob = await zip.generateAsync({type:'blob'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=(p.identity.launcherName||p.name).replace(/\s+/g,'-').toLowerCase()+'-source.zip'; a.click();
-    URL.revokeObjectURL(url);
-    appendLog(buildId, 'Artifact available: source project (.zip). Compiling to a native installer requires a build environment.', 'succeeded');
+    if(timedOut) return;
+
+    // Never mark completed unless a real, non-empty artifact was produced.
+    if(!blob || blob.size === 0){
+      throw new Error('Build produced an empty artifact -- refusing to mark this build as completed.');
+    }
+
+    const filename = (p.identity.launcherName||p.name).replace(/\s+/g,'-').toLowerCase()+'-source.zip';
+    ARTIFACTS[buildId] = { blob, filename };
+
+    clearTimeout(timeoutHandle);
+    completeBuild(buildId, filename, blob.size);
+
+    // The build itself is done and the artifact is real and verified above --
+    // auto-starting the download is a convenience, not part of the build. If
+    // the browser blocks/fails it, that must never retroactively flip an
+    // already-completed build back to failed (the artifact still exists and
+    // is downloadable via the "Download Build" button either way).
+    try{
+      downloadBlob(blob, filename);
+    }catch(downloadErr){
+      logBuild(buildId, 'Note: automatic download did not start ('+downloadErr.message+'). Use the "Download Build" button below to get the artifact.');
+    }
   }catch(e){
-    appendLog(buildId, 'Build failed: '+e.message, 'failed');
+    clearTimeout(timeoutHandle);
+    if(!timedOut) failBuild(buildId, e && e.message ? e.message : String(e));
+  }finally{
+    RUNNING_PROJECTS.delete(projectId);
   }
+}
+
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Re-download a completed build's real artifact without re-running the build.
+// Only works for builds completed in the current tab session -- the raw zip
+// bytes aren't persisted to localStorage (they'd blow the quota instantly and
+// re-trigger the exact bug we just fixed), so a page reload clears them. This
+// is stated plainly in the UI rather than faking persistence.
+function redownloadBuild(buildId){
+  const artifact = ARTIFACTS[buildId];
+  if(!artifact){
+    alert("This build's artifact is no longer available in memory (the page was reloaded since it completed). Click Generate again to produce a fresh download.");
+    return;
+  }
+  downloadBlob(artifact.blob, artifact.filename);
+}
+
+function retryBuild(projectId){
+  generateAndDownload(projectId);
 }
 
 /* ============ ROOT RENDER ============ */
