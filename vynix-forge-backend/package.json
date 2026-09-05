@@ -1,0 +1,25 @@
+{
+  "name": "vynix-forge-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "archiver": "^6.0.2",
+    "better-sqlite3": "^13.0.3",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "node-fetch": "^2.7.0",
+    "stripe": "^22.6.1"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  }
+}
